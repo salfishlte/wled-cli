@@ -1,0 +1,6 @@
+/target
+/wled
+**/*.rs.bk
+*.swp
+*~
+.DS_Store
