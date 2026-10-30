@@ -487,7 +487,7 @@ impl App {
                 KeyCode::Enter => {
                     if !settings.confirm_reboot {
                         settings.confirm_reboot = true;
-                        settings.status = String::from("⚠️ press enter again to confirm reboot!");
+                        settings.status = String::from("⚠️ press enter to confirm reboot");
                     } else {
                         let _ = self.client.reboot(&ip);
                         settings.confirm_reboot = false;
