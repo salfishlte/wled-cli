@@ -1,3 +1,10 @@
+## v0.1.3 // 10/30/26, 19:30
+- features
+  - added settings (network, power, about)
+  - added signal status in main menu
+- ui
+  - some edits in main menu
+
 ## v0.1.2 // 10/19/26, 21:30
 - core
   - complete rewrite from python to rust

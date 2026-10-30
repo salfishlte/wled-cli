@@ -47,10 +47,16 @@ fn run_loop<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut 
                         continue;
                     }
 
+                    if app.settings.is_some() {
+                        app.handle_settings_key(key);
+                        continue;
+                    }
+
                     match key.code {
                         KeyCode::Esc | KeyCode::Char('q') => app.should_quit = true,
                         KeyCode::Char('m') => app.cycle_current_mode(),
                         KeyCode::Char('a') => app.open_add_device(),
+                        KeyCode::Char('s') => app.open_settings(),
                         KeyCode::Tab => app.cycle_focus(),
                         KeyCode::BackTab => app.cycle_focus_back(),
                         KeyCode::Char(' ') => app.toggle_power(),
