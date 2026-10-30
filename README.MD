@@ -1,5 +1,3 @@
-> linux ready, win/mac in progress
-
 ## wled-cli
 wled-cli is a lightweight, blazing-fast cli utility for wled devices, built with rust for sub-millisecond execution (<1ms) and minimal resource footprint (~880kb).
 
