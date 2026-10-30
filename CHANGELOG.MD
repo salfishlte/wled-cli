@@ -1,4 +1,4 @@
-## v0.1.3 // 10/30/26, 19:30
+## v0.1.3 // 10/30/26, 19:33
 - features
   - added settings (network, power, about)
   - added signal status in main menu
