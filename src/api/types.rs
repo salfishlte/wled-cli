@@ -38,18 +38,37 @@ impl DeviceCapability {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
+#[allow(dead_code)]
+pub struct WledWifiInfo {
+    pub bssid: Option<String>,
+    pub signal: Option<i32>,
+    pub channel: Option<u8>,
+    pub rssi: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[allow(dead_code)]
 pub struct WledInfo {
-    #[allow(dead_code)]
     pub ver: Option<String>,
+    pub vid: Option<u32>,
     pub name: String,
+    pub arch: Option<String>,
+    pub uptime: Option<u64>,
+    pub freeheap: Option<u32>,
+    pub mac: Option<String>,
+    pub ip: Option<String>,
+    pub wifi: Option<WledWifiInfo>,
     pub leds: Option<LedsInfo>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[allow(dead_code)]
 pub struct LedsInfo {
     pub count: Option<u16>,
+    pub pwr: Option<u32>,
+    pub maxpwr: Option<u32>,
+    pub fps: Option<u8>,
     pub rgb: Option<bool>,
     pub rgbw: Option<bool>,
     pub wv: Option<serde_json::Value>,

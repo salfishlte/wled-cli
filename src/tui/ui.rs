@@ -1,5 +1,7 @@
 use crate::api::types::DeviceCapability;
-use crate::tui::app::{AddDeviceModal, AddField, App, Focus};
+use crate::tui::app::{
+    AddDeviceModal, AddField, App, Focus, NetworkField, PowerField, SettingsModal, SettingsTab,
+};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -30,13 +32,31 @@ pub fn draw(f: &mut Frame, app: &App) {
         .constraints([Constraint::Length(24), Constraint::Min(35)])
         .split(main_chunks[0]);
 
+    if let Some(modal) = &app.adding_device {
+        draw_add_device_modal(f, modal, inner);
+        let add_footer = Line::from(vec![
+            Span::styled(" [tab]", Style::default().fg(Color::Cyan)),
+            Span::raw(" next •"),
+            Span::styled(" [space]", Style::default().fg(Color::Cyan)),
+            Span::raw(" mode •"),
+            Span::styled(" [enter]", Style::default().fg(Color::Cyan)),
+            Span::raw(" save •"),
+            Span::styled(" [esc]", Style::default().fg(Color::Cyan)),
+            Span::raw(" cancel"),
+        ]);
+        f.render_widget(Paragraph::new(add_footer), main_chunks[1]);
+        return;
+    }
+
+    if let Some(settings) = &app.settings {
+        draw_settings_modal(f, app, settings, inner);
+        draw_settings_footer(f, settings, main_chunks[1]);
+        return;
+    }
+
     draw_devices(f, app, content_chunks[0]);
     draw_controls(f, app, content_chunks[1]);
     draw_footer(f, app, main_chunks[1]);
-
-    if let Some(modal) = &app.adding_device {
-        draw_add_device_modal(f, modal, size);
-    }
 }
 
 fn draw_devices(f: &mut Frame, app: &App, area: Rect) {
@@ -88,7 +108,16 @@ fn draw_controls(f: &mut Frame, app: &App, area: Rect) {
 
     let ctrl_focused = app.focus == Focus::Brightness;
     let border_color = if ctrl_focused { Color::Cyan } else { Color::DarkGray };
-    let dev_title = format!(" current: {} ({}) [{}] ", dev.name, dev.ip, dev.capability.name());
+
+    let sig_badge = match app.info.as_ref().and_then(|i| i.wifi.as_ref()) {
+        Some(w) => {
+            let s = w.signal.unwrap_or(0).clamp(0, 100);
+            format!(" • 📶 {}%", s)
+        }
+        None => String::new(),
+    };
+
+    let dev_title = format!(" current: {} ({}){} [{}] ", dev.name.to_lowercase(), dev.ip, sig_badge, dev.capability.name());
     let is_on = app.state.as_ref().and_then(|s| s.on).unwrap_or(false);
     let power_line = Line::from(vec![
         Span::raw(" power: "),
@@ -234,29 +263,27 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let status_color = if app.status_msg.starts_with("error") || app.status_msg.contains("error") { Color::Red } else { Color::DarkGray };
 
     let footer_line = Line::from(vec![
-        Span::styled(" [arrows]", Style::default().fg(Color::Cyan)),
-        Span::raw(": navigate  |"),
         Span::styled(" [space]", Style::default().fg(Color::Cyan)),
-        Span::raw(": power  |"),
+        Span::raw(" power •"),
+        Span::styled(" [s]", Style::default().fg(Color::Cyan)),
+        Span::raw(" settings •"),
         Span::styled(" [m]", Style::default().fg(Color::Cyan)),
-        Span::raw(": mode  |"),
-        Span::styled(" [enter]", Style::default().fg(Color::Cyan)),
-        Span::raw(": apply  |"),
+        Span::raw(" mode •"),
         Span::styled(" [a]", Style::default().fg(Color::Cyan)),
-        Span::raw(": add  |"),
+        Span::raw(" add •"),
         Span::styled(" [d]", Style::default().fg(Color::Cyan)),
-        Span::raw(": del  |"),
+        Span::raw(" del •"),
         Span::styled(" [q]", Style::default().fg(Color::Cyan)),
-        Span::raw(": quit  "),
-        Span::styled(format!("-> {}", app.status_msg), Style::default().fg(status_color)),
+        Span::raw(" quit   "),
+        Span::styled(format!("-> {}", app.status_msg.to_lowercase()), Style::default().fg(status_color)),
     ]);
 
     f.render_widget(Paragraph::new(footer_line), area);
 }
 
 fn draw_add_device_modal(f: &mut Frame, modal: &AddDeviceModal, area: Rect) {
-    let w = 46.min(area.width.saturating_sub(4));
-    let h = 7.min(area.height.saturating_sub(2));
+    let w = 48.min(area.width.saturating_sub(4));
+    let h = 5.min(area.height.saturating_sub(2));
     let popup = Rect {
         x: area.x + (area.width.saturating_sub(w)) / 2,
         y: area.y + (area.height.saturating_sub(h)) / 2,
@@ -276,12 +303,12 @@ fn draw_add_device_modal(f: &mut Frame, modal: &AddDeviceModal, area: Rect) {
         let (text, style) = if val.is_empty() {
             (placeholder.to_string(), Style::default().fg(Color::DarkGray))
         } else if is_f {
-            (val.to_string(), Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED | Modifier::BOLD))
+            (val.to_string(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
         } else {
             (val.to_string(), Style::default().fg(Color::White))
         };
         Line::from(vec![
-            Span::styled(format!(" {}: [ ", label), if is_f { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::Gray) }),
+            Span::styled(format!(" {}: [ ", label), if is_f { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) }),
             Span::styled(format!("{:<26}", text), style),
             Span::raw(" ]"),
         ])
@@ -297,21 +324,237 @@ fn draw_add_device_modal(f: &mut Frame, modal: &AddDeviceModal, area: Rect) {
         field_line("ip  ", &modal.ip, "192.168.1.x", ip_f),
         field_line("name", &modal.name, "my-wled", name_f),
         Line::from(vec![
-            Span::styled(" mode: [ ", if mode_f { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::Gray) }),
+            Span::styled(" mode: [ ", if mode_f { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) }),
             Span::styled(format!("{:<26}", mode_str), if mode_f { Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) }),
             Span::raw(" ]"),
         ]),
-        Line::raw(""),
-        Line::from(vec![
-            Span::styled("[tab]", Style::default().fg(Color::Cyan)),
-            Span::raw(":next "),
-            Span::styled("[space]", Style::default().fg(Color::Cyan)),
-            Span::raw(":mode "),
-            Span::styled("[enter]", Style::default().fg(Color::Cyan)),
-            Span::raw(":save "),
-            Span::styled("[esc]", Style::default().fg(Color::Cyan)),
-            Span::raw(":cancel"),
-        ]),
     ];
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn format_uptime(secs: u64) -> String {
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    let mins = (secs % 3600) / 60;
+    let s = secs % 60;
+    if days > 0 {
+        format!("{}d {}h {}m", days, hours, mins)
+    } else if hours > 0 {
+        format!("{}h {}m {}s", hours, mins, s)
+    } else {
+        format!("{}m {}s", mins, s)
+    }
+}
+
+fn draw_settings_footer(f: &mut Frame, settings: &SettingsModal, area: Rect) {
+    let footer_line = Line::from(vec![
+        Span::styled(" [←/→]", Style::default().fg(Color::Cyan)),
+        Span::raw(" tabs •"),
+        Span::styled(" [↑/↓]", Style::default().fg(Color::Cyan)),
+        Span::raw(" select •"),
+        Span::styled(" [enter]", Style::default().fg(Color::Cyan)),
+        Span::raw(" save •"),
+        Span::styled(" [esc]", Style::default().fg(Color::Cyan)),
+        Span::raw(" close   "),
+        Span::styled(format!("-> {}", settings.status.to_lowercase()), Style::default().fg(Color::Cyan)),
+    ]);
+    f.render_widget(Paragraph::new(footer_line), area);
+}
+
+fn draw_settings_modal(f: &mut Frame, app: &App, settings: &SettingsModal, area: Rect) {
+    let w = 54.min(area.width.saturating_sub(4));
+    let h = 15.min(area.height.saturating_sub(2));
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, popup);
+    let dev_name = app.current_device().map(|d| d.name.as_str()).unwrap_or("device");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(format!(" settings: {} ", dev_name.to_lowercase()));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let tab_style = |t: SettingsTab| -> Style {
+        if settings.tab == t {
+            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        }
+    };
+
+    let tabs_line = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(" 1. network ", tab_style(SettingsTab::Network)),
+        Span::raw("   "),
+        Span::styled(" 2. power ", tab_style(SettingsTab::Power)),
+        Span::raw("   "),
+        Span::styled(" 3. about ", tab_style(SettingsTab::About)),
+    ]);
+
+    let mut lines = vec![tabs_line, Line::raw("")];
+
+    match settings.tab {
+        SettingsTab::Network => {
+            let (sig_str, sig_col) = match app.info.as_ref().and_then(|i| i.wifi.as_ref()) {
+                Some(w) => {
+                    let s = w.signal.unwrap_or(0).clamp(0, 100);
+                    let col = if s >= 70 { Color::Green } else if s >= 40 { Color::Yellow } else { Color::Red };
+                    let ch = w.channel.map(|c| format!(" (ch {})", c)).unwrap_or_default();
+                    (format!("📶 {}%{}", s, ch), col)
+                }
+                None => (String::from("📶 offline"), Color::DarkGray),
+            };
+
+            let ip_str = app.current_device().map(|d| d.ip.as_str()).unwrap_or("--");
+
+            lines.push(Line::from(vec![
+                Span::styled(" wifi: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(sig_str, Style::default().fg(sig_col).add_modifier(Modifier::BOLD)),
+                Span::styled(" • ip: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(ip_str, Style::default().fg(Color::White)),
+            ]));
+            lines.push(Line::raw(""));
+
+            let mdns_f = settings.network_field == NetworkField::Mdns;
+            let ssid_f = settings.network_field == NetworkField::WifiSsid;
+            let pass_f = settings.network_field == NetworkField::WifiPass;
+            let save_f = settings.network_field == NetworkField::SaveWifi;
+
+            let field_render = |label: &str, val: &str, placeholder: &str, is_f: bool, is_pass: bool| -> Line<'static> {
+                let display_val = if val.is_empty() {
+                    placeholder.to_string()
+                } else if is_pass {
+                    "*".repeat(val.len().min(16))
+                } else {
+                    val.to_string()
+                };
+                let style = if val.is_empty() {
+                    Style::default().fg(Color::DarkGray)
+                } else if is_f {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Line::from(vec![
+                    Span::styled(format!(" {}: [ ", label), if is_f { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) }),
+                    Span::styled(format!("{:<18}", display_val), style),
+                    Span::raw(" ]"),
+                ])
+            };
+
+            lines.push(field_render("mdns name", &settings.mdns, "wled-device", mdns_f, false));
+            lines.push(field_render("wifi ssid", &settings.wifi_ssid, "network-name", ssid_f, false));
+            lines.push(field_render("wifi pass", &settings.wifi_pass, "password", pass_f, true));
+            lines.push(Line::raw(""));
+
+            let save_style = if save_f {
+                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(" [ save wifi ] ", save_style),
+            ]));
+        }
+        SettingsTab::Power => {
+            let pwr_now = app.info.as_ref().and_then(|i| i.leds.as_ref()).and_then(|l| l.pwr).unwrap_or(0);
+            let pwr_max = app.info.as_ref().and_then(|i| i.leds.as_ref()).and_then(|l| l.maxpwr).unwrap_or(850);
+            let leds_cnt = app.info.as_ref().and_then(|i| i.leds.as_ref()).and_then(|l| l.count).unwrap_or(0);
+            let pct = if pwr_max > 0 { ((pwr_now as f32 / pwr_max as f32) * 100.0).round() as u16 } else { 0 };
+
+            lines.push(Line::from(vec![
+                Span::styled(" draw: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{} ma", pwr_now), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" / {} ma limit", pwr_max), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!(" ({} leds)", leds_cnt), Style::default().fg(Color::Gray)),
+            ]));
+
+            let bar_w = 16;
+            let filled = ((pct as usize * bar_w) / 100).min(bar_w);
+            let pwr_bar = format!("{}{}", "█".repeat(filled), "░".repeat(bar_w - filled));
+            let bar_col = if pct >= 90 { Color::Red } else if pct >= 70 { Color::Yellow } else { Color::Green };
+
+            lines.push(Line::from(vec![
+                Span::styled(" load: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[", Style::default().fg(Color::DarkGray)),
+                Span::styled(pwr_bar, Style::default().fg(bar_col)),
+                Span::styled(format!("] {:>3}%", pct), Style::default().fg(Color::White)),
+            ]));
+            lines.push(Line::raw(""));
+
+            let pwr_f = settings.power_field == PowerField::MaxPower;
+            let boot_f = settings.power_field == PowerField::BootOn;
+            let save_f = settings.power_field == PowerField::SavePower;
+
+            lines.push(Line::from(vec![
+                Span::styled(" max limit (ma): [ ", if pwr_f { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) }),
+                Span::styled(format!("{:<8}", settings.max_power), if pwr_f { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) }),
+                Span::raw(" ]"),
+            ]));
+
+            let boot_label = if settings.boot_on { "[ on  ]" } else { "[ off ]" };
+            let boot_col = if settings.boot_on { Color::Green } else { Color::DarkGray };
+            lines.push(Line::from(vec![
+                Span::styled(" turn on at boot: ", if boot_f { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) }),
+                Span::styled(boot_label, Style::default().fg(boot_col).add_modifier(Modifier::BOLD)),
+                Span::styled("  (space to toggle)", Style::default().fg(Color::DarkGray)),
+            ]));
+            lines.push(Line::raw(""));
+
+            let save_style = if save_f {
+                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(" [ save power ] ", save_style),
+            ]));
+        }
+        SettingsTab::About => {
+            let arch = app.info.as_ref().and_then(|i| i.arch.as_deref()).unwrap_or("unknown").to_lowercase();
+            let ver = app.info.as_ref().and_then(|i| i.ver.as_deref()).unwrap_or("unknown").to_lowercase();
+            let uptime_s = app.info.as_ref().and_then(|i| i.uptime).unwrap_or(0);
+            let free_kb = app.info.as_ref().and_then(|i| i.freeheap).map(|b| b / 1024).unwrap_or(0);
+            let fps = app.info.as_ref().and_then(|i| i.leds.as_ref()).and_then(|l| l.fps).unwrap_or(0);
+            let leds_cnt = app.info.as_ref().and_then(|i| i.leds.as_ref()).and_then(|l| l.count).unwrap_or(0);
+
+            lines.push(Line::from(vec![
+                Span::styled(" chip:     ", Style::default().fg(Color::DarkGray)),
+                Span::styled(arch, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(" • wled ", Style::default().fg(Color::DarkGray)),
+                Span::styled(ver, Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled(" uptime:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format_uptime(uptime_s), Style::default().fg(Color::Yellow)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled(" memory:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{} kb free", free_kb), Style::default().fg(Color::White)),
+                Span::styled(format!(" • {} fps", fps), Style::default().fg(Color::Green)),
+                Span::styled(format!(" • {} leds", leds_cnt), Style::default().fg(Color::Gray)),
+            ]));
+            lines.push(Line::raw(""));
+
+            let (btn_text, btn_style) = if settings.confirm_reboot {
+                (" [ ⚠️ press enter to confirm reboot ] ", Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD))
+            } else {
+                (" [ 🔄 reboot controller ] ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))
+            };
+
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(btn_text, btn_style),
+            ]));
+        }
+    }
+
     f.render_widget(Paragraph::new(lines), inner);
 }

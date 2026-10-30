@@ -109,4 +109,35 @@ impl WledClient {
     pub fn set_color(&self, ip: &str, rgb: [u8; 3]) -> Result<(), String> {
         self.post_state(ip, &ColorPayload { on: true, seg: [ColorSeg { col: [rgb], fx: 0 }] })
     }
+
+    pub fn reboot(&self, ip: &str) -> Result<(), String> {
+        let _ = self.agent
+            .post(&url_endpoint(ip, "state"))
+            .send_json(&serde_json::json!({ "rb": true }));
+        Ok(())
+    }
+
+    pub fn post_cfg<T: Serialize>(&self, ip: &str, body: &T) -> Result<(), String> {
+        self.agent
+            .post(&url_endpoint(ip, "cfg"))
+            .send_json(body)
+            .map_err(|e| format!("cfg error {}: {}", ip, e))?;
+        Ok(())
+    }
+
+    pub fn set_mdns(&self, ip: &str, mdns: &str) -> Result<(), String> {
+        self.post_cfg(ip, &serde_json::json!({ "id": { "mdns": mdns } }))
+    }
+
+    pub fn set_wifi(&self, ip: &str, ssid: &str, pswd: &str) -> Result<(), String> {
+        self.post_cfg(ip, &serde_json::json!({ "nw": { "ins": [{ "ssid": ssid, "pswd": pswd }] } }))
+    }
+
+    pub fn set_power_limit(&self, ip: &str, maxpwr: u32) -> Result<(), String> {
+        self.post_cfg(ip, &serde_json::json!({ "hw": { "led": { "maxpwr": maxpwr } } }))
+    }
+
+    pub fn set_boot_on(&self, ip: &str, on: bool) -> Result<(), String> {
+        self.post_cfg(ip, &serde_json::json!({ "def": { "on": on } }))
+    }
 }

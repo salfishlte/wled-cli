@@ -1,4 +1,4 @@
-use crate::api::types::{DeviceCapability, PaletteColor, WledState, BASE_PALETTE};
+use crate::api::types::{DeviceCapability, PaletteColor, WledInfo, WledState, BASE_PALETTE};
 use crate::api::WledClient;
 use crate::config::{AppConfig, DeviceEntry};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -25,17 +25,72 @@ pub struct AddDeviceModal {
     pub active_field: AddField,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    Network,
+    Power,
+    About,
+}
+
+impl SettingsTab {
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Network => Self::Power,
+            Self::Power => Self::About,
+            Self::About => Self::Network,
+        }
+    }
+
+    pub fn prev(&self) -> Self {
+        match self {
+            Self::Network => Self::About,
+            Self::Power => Self::Network,
+            Self::About => Self::Power,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkField {
+    Mdns,
+    WifiSsid,
+    WifiPass,
+    SaveWifi,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerField {
+    MaxPower,
+    BootOn,
+    SavePower,
+}
+
+pub struct SettingsModal {
+    pub tab: SettingsTab,
+    pub network_field: NetworkField,
+    pub power_field: PowerField,
+    pub mdns: String,
+    pub wifi_ssid: String,
+    pub wifi_pass: String,
+    pub max_power: String,
+    pub boot_on: bool,
+    pub status: String,
+    pub confirm_reboot: bool,
+}
+
 pub struct App {
     pub client: WledClient,
     pub devices: Vec<(String, DeviceEntry)>,
     pub selected_device: usize,
     pub state: Option<WledState>,
+    pub info: Option<WledInfo>,
     pub focus: Focus,
     pub palette: &'static [PaletteColor],
     pub selected_palette: usize,
     pub status_msg: String,
     pub should_quit: bool,
     pub adding_device: Option<AddDeviceModal>,
+    pub settings: Option<SettingsModal>,
 }
 
 impl App {
@@ -49,12 +104,14 @@ impl App {
             devices,
             selected_device: 0,
             state: None,
+            info: None,
             focus: Focus::Devices,
             palette: BASE_PALETTE,
             selected_palette: 0,
             status_msg: String::from("ready"),
             should_quit: false,
             adding_device: None,
+            settings: None,
         };
 
         if app.devices.is_empty() {
@@ -229,16 +286,219 @@ impl App {
     pub fn refresh_state(&mut self) {
         if let Some((_, dev)) = self.devices.get_mut(self.selected_device) {
             let (ip, name) = (dev.ip.clone(), dev.name.clone());
+            if let Ok(info) = self.client.get_info(&ip) {
+                self.info = Some(info);
+            }
             match self.client.get_state(&ip) {
                 Ok(state) => {
                     self.state = Some(state);
                     self.status_msg = format!("connected to {}", name);
                 }
-                Err(e) => self.status_msg = format!("error: {}", e),
+                Err(e) => {
+                    self.info = None;
+                    self.status_msg = format!("error: {}", e);
+                }
             }
         } else {
             self.state = None;
+            self.info = None;
             self.status_msg = String::from("no devices configured");
+        }
+    }
+
+    pub fn open_settings(&mut self) {
+        if let Some(dev) = self.current_device() {
+            let ip = dev.ip.clone();
+            let info = self.client.get_info(&ip).ok();
+            let max_pwr_str = info.as_ref()
+                .and_then(|i| i.leds.as_ref())
+                .and_then(|l| l.maxpwr)
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "850".to_string());
+            let mdns_init = dev.name.clone();
+
+            self.settings = Some(SettingsModal {
+                tab: SettingsTab::Network,
+                network_field: NetworkField::Mdns,
+                power_field: PowerField::MaxPower,
+                mdns: mdns_init,
+                wifi_ssid: String::new(),
+                wifi_pass: String::new(),
+                max_power: max_pwr_str,
+                boot_on: true,
+                status: String::from("[tab]: switch tabs  [enter]: save/action"),
+                confirm_reboot: false,
+            });
+            if info.is_some() {
+                self.info = info;
+            }
+        } else {
+            self.status_msg = String::from("no device selected for settings");
+        }
+    }
+
+    pub fn handle_settings_key(&mut self, key: KeyEvent) {
+        let Some(settings) = &mut self.settings else { return; };
+        let Some(dev) = self.devices.get(self.selected_device).map(|(_, d)| d.clone()) else { return; };
+        let ip = dev.ip.clone();
+
+        match key.code {
+            KeyCode::Esc => {
+                self.settings = None;
+                return;
+            }
+            KeyCode::Tab | KeyCode::Right => {
+                settings.tab = settings.tab.next();
+                settings.confirm_reboot = false;
+                return;
+            }
+            KeyCode::BackTab | KeyCode::Left => {
+                settings.tab = settings.tab.prev();
+                settings.confirm_reboot = false;
+                return;
+            }
+            KeyCode::Char('1') if settings.network_field == NetworkField::SaveWifi || settings.power_field == PowerField::SavePower || settings.power_field == PowerField::BootOn || settings.tab == SettingsTab::About => {
+                settings.tab = SettingsTab::Network;
+                settings.confirm_reboot = false;
+                return;
+            }
+            KeyCode::Char('2') if settings.network_field == NetworkField::SaveWifi || settings.power_field == PowerField::SavePower || settings.power_field == PowerField::BootOn || settings.tab == SettingsTab::About => {
+                settings.tab = SettingsTab::Power;
+                settings.confirm_reboot = false;
+                return;
+            }
+            KeyCode::Char('3') if settings.network_field == NetworkField::SaveWifi || settings.power_field == PowerField::SavePower || settings.power_field == PowerField::BootOn || settings.tab == SettingsTab::About => {
+                settings.tab = SettingsTab::About;
+                settings.confirm_reboot = false;
+                return;
+            }
+            _ => {}
+        }
+
+        match settings.tab {
+            SettingsTab::Network => match key.code {
+                KeyCode::Up => {
+                    settings.network_field = match settings.network_field {
+                        NetworkField::Mdns => NetworkField::SaveWifi,
+                        NetworkField::WifiSsid => NetworkField::Mdns,
+                        NetworkField::WifiPass => NetworkField::WifiSsid,
+                        NetworkField::SaveWifi => NetworkField::WifiPass,
+                    };
+                }
+                KeyCode::Down => {
+                    settings.network_field = match settings.network_field {
+                        NetworkField::Mdns => NetworkField::WifiSsid,
+                        NetworkField::WifiSsid => NetworkField::WifiPass,
+                        NetworkField::WifiPass => NetworkField::SaveWifi,
+                        NetworkField::SaveWifi => NetworkField::Mdns,
+                    };
+                }
+                KeyCode::Backspace => match settings.network_field {
+                    NetworkField::Mdns => { settings.mdns.pop(); }
+                    NetworkField::WifiSsid => { settings.wifi_ssid.pop(); }
+                    NetworkField::WifiPass => { settings.wifi_pass.pop(); }
+                    _ => {}
+                },
+                KeyCode::Enter => match settings.network_field {
+                    NetworkField::Mdns => {
+                        let name = settings.mdns.trim();
+                        if !name.is_empty() {
+                            match self.client.set_mdns(&ip, name) {
+                                Ok(_) => settings.status = format!("mdns updated to '{}.local'", name),
+                                Err(e) => settings.status = format!("error: {}", e),
+                            }
+                        }
+                    }
+                    NetworkField::WifiSsid => {
+                        settings.network_field = NetworkField::WifiPass;
+                    }
+                    NetworkField::WifiPass | NetworkField::SaveWifi => {
+                        let ssid = settings.wifi_ssid.trim();
+                        let pass = settings.wifi_pass.trim();
+                        if ssid.is_empty() {
+                            settings.status = String::from("error: ssid cannot be empty");
+                        } else {
+                            match self.client.set_wifi(&ip, ssid, pass) {
+                                Ok(_) => settings.status = format!("wifi credentials saved for '{}'", ssid),
+                                Err(e) => settings.status = format!("error: {}", e),
+                            }
+                        }
+                    }
+                },
+                KeyCode::Char(c) => match settings.network_field {
+                    NetworkField::Mdns if settings.mdns.len() < 32 && (c.is_ascii_alphanumeric() || c == '-' || c == '_') => {
+                        settings.mdns.push(c.to_ascii_lowercase());
+                    }
+                    NetworkField::WifiSsid if settings.wifi_ssid.len() < 32 && !c.is_ascii_control() => {
+                        settings.wifi_ssid.push(c);
+                    }
+                    NetworkField::WifiPass if settings.wifi_pass.len() < 64 && !c.is_ascii_control() => {
+                        settings.wifi_pass.push(c);
+                    }
+                    _ => {}
+                },
+                _ => {}
+            },
+            SettingsTab::Power => match key.code {
+                KeyCode::Up => {
+                    settings.power_field = match settings.power_field {
+                        PowerField::MaxPower => PowerField::SavePower,
+                        PowerField::BootOn => PowerField::MaxPower,
+                        PowerField::SavePower => PowerField::BootOn,
+                    };
+                }
+                KeyCode::Down => {
+                    settings.power_field = match settings.power_field {
+                        PowerField::MaxPower => PowerField::BootOn,
+                        PowerField::BootOn => PowerField::SavePower,
+                        PowerField::SavePower => PowerField::MaxPower,
+                    };
+                }
+                KeyCode::Char(' ') if settings.power_field == PowerField::BootOn => {
+                    settings.boot_on = !settings.boot_on;
+                }
+                KeyCode::Backspace if settings.power_field == PowerField::MaxPower => {
+                    settings.max_power.pop();
+                }
+                KeyCode::Char(c) if settings.power_field == PowerField::MaxPower && c.is_ascii_digit() && settings.max_power.len() < 6 => {
+                    settings.max_power.push(c);
+                }
+                KeyCode::Enter => match settings.power_field {
+                    PowerField::BootOn => {
+                        settings.boot_on = !settings.boot_on;
+                    }
+                    PowerField::MaxPower | PowerField::SavePower => {
+                        if let Ok(ma) = settings.max_power.trim().parse::<u32>() {
+                            let r1 = self.client.set_power_limit(&ip, ma);
+                            let r2 = self.client.set_boot_on(&ip, settings.boot_on);
+                            if r1.is_ok() && r2.is_ok() {
+                                settings.status = format!("saved: limit {} ma, boot {}", ma, if settings.boot_on { "on" } else { "off" });
+                            } else {
+                                settings.status = String::from("error saving power settings");
+                            }
+                        } else {
+                            settings.status = String::from("error: invalid ma number");
+                        }
+                    }
+                },
+                _ => {}
+            },
+            SettingsTab::About => match key.code {
+                KeyCode::Enter => {
+                    if !settings.confirm_reboot {
+                        settings.confirm_reboot = true;
+                        settings.status = String::from("⚠️ press enter again to confirm reboot!");
+                    } else {
+                        let _ = self.client.reboot(&ip);
+                        settings.confirm_reboot = false;
+                        settings.status = String::from("reboot signal sent to device");
+                        self.status_msg = format!("rebooting {}", dev.name.to_lowercase());
+                    }
+                }
+                _ => {
+                    settings.confirm_reboot = false;
+                }
+            },
         }
     }
 
